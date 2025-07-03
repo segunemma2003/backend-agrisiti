@@ -21,10 +21,34 @@ class StudentRegistrationController extends Controller
     private const CACHE_REGISTRATION_ANALYTICS = 'registration_analytics';
     private const CACHE_TTL = 3600; // 1 hour
 
+    /**
+     * Handle preflight OPTIONS requests
+     */
+    public function handlePreflight()
+    {
+        return response()->json([], 200)
+            ->header('Access-Control-Allow-Origin', '*')
+            ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN')
+            ->header('Access-Control-Max-Age', '86400');
+    }
+
+    /**
+     * Add CORS headers to response
+     */
+    private function addCorsHeaders($response)
+    {
+        return $response
+            ->header('Access-Control-Allow-Origin', '*')
+            ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN')
+            ->header('Access-Control-Max-Age', '86400');
+    }
+
     public function store(StoreStudentRegistrationRequest $request): JsonResponse
     {
         try {
-            return DB::transaction(function () use ($request) {
+            $response = DB::transaction(function () use ($request) {
                 // Optimized creation with minimal queries
                 $registration = StudentRegistration::create([
                     ...$request->validated(),
@@ -51,17 +75,21 @@ class StudentRegistrationController extends Controller
                 ], 201);
             });
 
+            return $this->addCorsHeaders($response);
+
         } catch (\Exception $e) {
             Log::error('Registration failed', [
                 'error' => $e->getMessage(),
                 'request_data' => $request->except(['password']),
             ]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Registration failed. Please try again.',
                 'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
 
