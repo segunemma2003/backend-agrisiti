@@ -29,24 +29,62 @@ class StudentRegistrationController extends Controller
         return response()->json([], 200)
             ->header('Access-Control-Allow-Origin', '*')
             ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN')
+            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN, X-Requested-With')
             ->header('Access-Control-Max-Age', '86400');
     }
 
     /**
-     * Add CORS headers to response
+     * Add CORS headers to response - Updated for production
      */
     private function addCorsHeaders($response)
     {
+        // Get the origin from the request
+        $origin = request()->header('Origin');
+
+        // List of allowed origins (including your production domain)
+        $allowedOrigins = [
+            'http://localhost:3000',
+            'http://localhost:5173',
+            'http://localhost:8080',
+            'http://127.0.0.1:5173',
+            'https://agrisiti.com',
+            'https://www.agrisiti.com',
+            'https://e-register.agrisiti.com', // Your production frontend
+            'https://backend.agrisiti.com',
+        ];
+
+        // Check if the origin is allowed or if it's a localhost variant
+        if (in_array($origin, $allowedOrigins) || $this->isLocalhost($origin)) {
+            $response->header('Access-Control-Allow-Origin', $origin);
+        } else {
+            // For completely open API, use '*'
+            $response->header('Access-Control-Allow-Origin', '*');
+        }
+
         return $response
-            ->header('Access-Control-Allow-Origin', '*')
             ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
             ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN')
+            ->header('Access-Control-Allow-Credentials', 'true')
             ->header('Access-Control-Max-Age', '86400');
+    }
+
+    /**
+     * Check if origin is localhost
+     */
+    private function isLocalhost(?string $origin): bool
+    {
+        if (!$origin) return false;
+
+        return preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/', $origin);
     }
 
     public function store(StoreStudentRegistrationRequest $request): JsonResponse
     {
+        // Handle preflight if it's an OPTIONS request
+        if ($request->isMethod('OPTIONS')) {
+            return $this->handlePreflight();
+        }
+
         try {
             $response = DB::transaction(function () use ($request) {
                 // Optimized creation with minimal queries
@@ -66,6 +104,7 @@ class StudentRegistrationController extends Controller
                     'student_id' => $registration->id,
                     'email' => $registration->email,
                     'school' => $registration->school_name,
+                    'origin' => $request->header('Origin'),
                 ]);
 
                 return response()->json([
@@ -81,6 +120,7 @@ class StudentRegistrationController extends Controller
             Log::error('Registration failed', [
                 'error' => $e->getMessage(),
                 'request_data' => $request->except(['password']),
+                'origin' => $request->header('Origin'),
             ]);
 
             $response = response()->json([
@@ -112,7 +152,7 @@ class StudentRegistrationController extends Controller
                 $registrations = $query->paginate($perPage);
             }
 
-            return response()->json([
+            $response = response()->json([
                 'success' => true,
                 'data' => StudentRegistrationResource::collection($registrations->items()),
                 'meta' => [
@@ -124,24 +164,30 @@ class StudentRegistrationController extends Controller
                 ],
             ]);
 
+            return $this->addCorsHeaders($response);
+
         } catch (\Exception $e) {
             Log::error('Failed to fetch registrations', ['error' => $e->getMessage()]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch registrations.',
                 'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
 
     public function show(StudentRegistration $registration): JsonResponse
     {
         // No additional queries needed, just return the resource
-        return response()->json([
+        $response = response()->json([
             'success' => true,
             'data' => new StudentRegistrationResource($registration),
         ]);
+
+        return $this->addCorsHeaders($response);
     }
 
     public function markAsContacted(StudentRegistration $registration): JsonResponse
@@ -154,11 +200,13 @@ class StudentRegistrationController extends Controller
                 'email' => $registration->email,
             ]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => true,
                 'message' => 'Student marked as contacted successfully.',
                 'data' => new StudentRegistrationResource($registration->fresh()),
             ]);
+
+            return $this->addCorsHeaders($response);
 
         } catch (\Exception $e) {
             Log::error('Failed to mark student as contacted', [
@@ -166,10 +214,12 @@ class StudentRegistrationController extends Controller
                 'error' => $e->getMessage(),
             ]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Failed to mark student as contacted.',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
 
@@ -183,11 +233,13 @@ class StudentRegistrationController extends Controller
                 'email' => $registration->email,
             ]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => true,
                 'message' => 'Student verified successfully.',
                 'data' => new StudentRegistrationResource($registration->fresh()),
             ]);
+
+            return $this->addCorsHeaders($response);
 
         } catch (\Exception $e) {
             Log::error('Failed to verify student', [
@@ -195,10 +247,12 @@ class StudentRegistrationController extends Controller
                 'error' => $e->getMessage(),
             ]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Failed to verify student.',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
 
@@ -214,18 +268,22 @@ class StudentRegistrationController extends Controller
                 }
             );
 
-            return response()->json([
+            $response = response()->json([
                 'success' => true,
                 'data' => $analytics,
             ]);
 
+            return $this->addCorsHeaders($response);
+
         } catch (\Exception $e) {
             Log::error('Failed to generate analytics', ['error' => $e->getMessage()]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Failed to generate analytics.',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
 
@@ -245,19 +303,23 @@ class StudentRegistrationController extends Controller
 
             $this->clearRegistrationCaches();
 
-            return response()->json([
+            $response = response()->json([
                 'success' => true,
                 'message' => "{$updated} students marked as contacted.",
                 'updated_count' => $updated,
             ]);
 
+            return $this->addCorsHeaders($response);
+
         } catch (\Exception $e) {
             Log::error('Bulk contact update failed', ['error' => $e->getMessage()]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Failed to update students.',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
 
@@ -276,21 +338,28 @@ class StudentRegistrationController extends Controller
 
             $this->clearRegistrationCaches();
 
-            return response()->json([
+            $response = response()->json([
                 'success' => true,
                 'message' => "{$updated} students marked as verified.",
                 'updated_count' => $updated,
             ]);
 
+            return $this->addCorsHeaders($response);
+
         } catch (\Exception $e) {
             Log::error('Bulk verification update failed', ['error' => $e->getMessage()]);
 
-            return response()->json([
+            $response = response()->json([
                 'success' => false,
                 'message' => 'Failed to update students.',
             ], 500);
+
+            return $this->addCorsHeaders($response);
         }
     }
+
+    // Rest of your existing methods remain the same...
+    // (applyFilters, generateAnalytics, clearRegistrationCaches, etc.)
 
     // Optimized filter application
     private function applyFilters($query, Request $request): void
