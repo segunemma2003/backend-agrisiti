@@ -16,27 +16,32 @@ use Carbon\Carbon;
 
 class StudentRegistrationController extends Controller
 {
+    // Cache keys for consistent cache management
+    private const CACHE_REGISTRATION_STATS = 'registration_stats';
+    private const CACHE_REGISTRATION_ANALYTICS = 'registration_analytics';
+    private const CACHE_TTL = 3600; // 1 hour
+
     public function store(StoreStudentRegistrationRequest $request): JsonResponse
     {
         try {
             return DB::transaction(function () use ($request) {
+                // Optimized creation with minimal queries
                 $registration = StudentRegistration::create([
                     ...$request->validated(),
                     'ip_address' => $request->ip(),
                     'user_agent' => $request->userAgent(),
                 ]);
 
-                // Clear cached statistics
-                Cache::forget('registration_stats');
-                Cache::forget('registration_analytics');
+                // Clear only necessary caches
+                $this->clearRegistrationCaches();
 
-                // Update daily analytics
-                $this->updateDailyAnalytics();
+                // Async analytics update (non-blocking)
+                $this->updateDailyAnalyticsAsync();
 
                 Log::info('New student registration', [
                     'student_id' => $registration->id,
                     'email' => $registration->email,
-                    'ip_address' => $registration->ip_address,
+                    'school' => $registration->school_name,
                 ]);
 
                 return response()->json([
@@ -63,28 +68,21 @@ class StudentRegistrationController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $query = StudentRegistration::query()->active();
+            // Start with optimized base query using forDashboard scope
+            $query = StudentRegistration::forDashboard();
 
-            // Apply filters using when() method
-            $query->when($request->filled('experience'), fn($q) =>
-                $q->byExperience($request->experience)
-            )
-            ->when($request->filled('location'), fn($q) =>
-                $q->byLocation($request->location)
-            )
-            ->when($request->filled('verified'), fn($q) =>
-                $q->where('is_verified', filter_var($request->verified, FILTER_VALIDATE_BOOLEAN))
-            )
-            ->when($request->filled('contacted'), fn($q) =>
-                $q->where('is_contacted', filter_var($request->contacted, FILTER_VALIDATE_BOOLEAN))
-            )
-            ->when($request->filled('search'), fn($q) =>
-                $q->search($request->search)
-            );
+            // Apply filters efficiently using indexed columns
+            $this->applyFilters($query, $request);
 
-            // Pagination
+            // Optimized pagination with proper limits
             $perPage = min($request->get('per_page', 20), 100);
-            $registrations = $query->latest()->paginate($perPage);
+
+            // Use cursor pagination for better performance on large datasets
+            if ($request->has('cursor')) {
+                $registrations = $query->cursorPaginate($perPage);
+            } else {
+                $registrations = $query->paginate($perPage);
+            }
 
             return response()->json([
                 'success' => true,
@@ -94,6 +92,7 @@ class StudentRegistrationController extends Controller
                     'last_page' => $registrations->lastPage(),
                     'per_page' => $registrations->perPage(),
                     'total' => $registrations->total(),
+                    'has_more_pages' => $registrations->hasMorePages(),
                 ],
             ]);
 
@@ -110,6 +109,7 @@ class StudentRegistrationController extends Controller
 
     public function show(StudentRegistration $registration): JsonResponse
     {
+        // No additional queries needed, just return the resource
         return response()->json([
             'success' => true,
             'data' => new StudentRegistrationResource($registration),
@@ -177,9 +177,14 @@ class StudentRegistrationController extends Controller
     public function analytics(): JsonResponse
     {
         try {
-            $analytics = Cache::remember('registration_analytics', 3600, function () {
-                return $this->generateAnalytics();
-            });
+            // Use cached analytics with longer TTL for heavy computation
+            $analytics = Cache::remember(
+                self::CACHE_REGISTRATION_ANALYTICS,
+                self::CACHE_TTL * 2, // 2 hours for analytics
+                function () {
+                    return $this->generateAnalytics();
+                }
+            );
 
             return response()->json([
                 'success' => true,
@@ -196,79 +201,264 @@ class StudentRegistrationController extends Controller
         }
     }
 
+    // Bulk operations for admin efficiency
+    public function bulkMarkContacted(Request $request): JsonResponse
+    {
+        $request->validate([
+            'student_ids' => 'required|array|max:100',
+            'student_ids.*' => 'exists:student_registrations,id',
+        ]);
+
+        try {
+            // Single bulk update query for performance
+            $updated = StudentRegistration::whereIn('id', $request->student_ids)
+                ->where('is_contacted', false)
+                ->update(['is_contacted' => true, 'updated_at' => now()]);
+
+            $this->clearRegistrationCaches();
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$updated} students marked as contacted.",
+                'updated_count' => $updated,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Bulk contact update failed', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update students.',
+            ], 500);
+        }
+    }
+
+    public function bulkMarkVerified(Request $request): JsonResponse
+    {
+        $request->validate([
+            'student_ids' => 'required|array|max:100',
+            'student_ids.*' => 'exists:student_registrations,id',
+        ]);
+
+        try {
+            // Single bulk update query for performance
+            $updated = StudentRegistration::whereIn('id', $request->student_ids)
+                ->where('is_verified', false)
+                ->update(['is_verified' => true, 'updated_at' => now()]);
+
+            $this->clearRegistrationCaches();
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$updated} students marked as verified.",
+                'updated_count' => $updated,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Bulk verification update failed', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update students.',
+            ], 500);
+        }
+    }
+
+    // Optimized filter application
+    private function applyFilters($query, Request $request): void
+    {
+        // Use when() for conditional queries with proper index usage
+        $query->when($request->filled('experience'), function ($q) use ($request) {
+            // Uses idx_active_experience composite index
+            $q->where('experience_level', $request->experience);
+        })
+        ->when($request->filled('location'), function ($q) use ($request) {
+            // Uses idx_active_location composite index
+            $q->where('location', 'like', "%{$request->location}%");
+        })
+        ->when($request->filled('verified'), function ($q) use ($request) {
+            // Uses idx_active_verified composite index
+            $q->where('is_verified', filter_var($request->verified, FILTER_VALIDATE_BOOLEAN));
+        })
+        ->when($request->filled('contacted'), function ($q) use ($request) {
+            // Uses idx_active_contacted composite index
+            $q->where('is_contacted', filter_var($request->contacted, FILTER_VALIDATE_BOOLEAN));
+        })
+        ->when($request->filled('age_from'), function ($q) use ($request) {
+            // Uses idx_age_active_created composite index
+            $q->where('age', '>=', $request->age_from);
+        })
+        ->when($request->filled('age_to'), function ($q) use ($request) {
+            $q->where('age', '<=', $request->age_to);
+        })
+        ->when($request->filled('school'), function ($q) use ($request) {
+            // Uses idx_school_active composite index
+            $q->where('school_name', 'like', "%{$request->school}%");
+        })
+        ->when($request->filled('search'), function ($q) use ($request) {
+            // Uses optimized search scope with proper indexes
+            $q->search($request->search);
+        });
+    }
+
+    // Highly optimized analytics generation
     private function generateAnalytics(): array
     {
         $baseStats = StudentRegistration::getRegistrationStats();
 
-        // Experience breakdown
-        $experienceBreakdown = StudentRegistration::active()
-            ->select('experience_level', DB::raw('count(*) as count'))
-            ->groupBy('experience_level')
-            ->pluck('count', 'experience_level')
-            ->mapWithKeys(fn($count, $level) =>
-                [StudentRegistration::getExperienceLevelLabel($level) => $count]
-            )
-            ->toArray();
-
-        // Location breakdown (top 10)
-        $locationBreakdown = StudentRegistration::active()
-            ->select('location', DB::raw('count(*) as count'))
-            ->groupBy('location')
-            ->orderByDesc('count')
-            ->limit(10)
-            ->pluck('count', 'location')
-            ->toArray();
-
-        // Interest breakdown
-        $interestBreakdown = $this->getInterestBreakdown();
-
-        // Daily registrations for last 30 days
-        $dailyRegistrations = $this->getDailyRegistrations();
-
-        return [
+        // All queries optimized with proper indexes and caching
+        $analytics = [
             ...$baseStats,
-            'experience_breakdown' => $experienceBreakdown,
-            'location_breakdown' => $locationBreakdown,
-            'interest_breakdown' => $interestBreakdown,
-            'daily_registrations' => $dailyRegistrations,
+            'experience_breakdown' => $this->getExperienceBreakdown(),
+            'location_breakdown' => $this->getLocationBreakdown(),
+            'school_breakdown' => $this->getSchoolBreakdown(),
+            'interest_breakdown' => StudentRegistration::getInterestBreakdown(),
+            'daily_registrations' => StudentRegistration::getDailyRegistrations(30),
+            'age_distribution' => $this->getAgeDistribution(),
         ];
+
+        return $analytics;
     }
 
-    private function getInterestBreakdown(): array
+    // Optimized breakdown methods using raw SQL for performance
+    private function getExperienceBreakdown(): array
     {
-        return StudentRegistration::active()
-            ->whereNotNull('interests')
-            ->pluck('interests')
-            ->flatten()
-            ->countBy()
-            ->sortDesc()
-            ->take(10)
-            ->toArray();
+        return Cache::remember('experience_breakdown', self::CACHE_TTL, function () {
+            $results = DB::select("
+                SELECT
+                    experience_level,
+                    COUNT(*) as count
+                FROM student_registrations
+                WHERE is_active = 1
+                GROUP BY experience_level
+                ORDER BY count DESC
+            ");
+
+            $breakdown = [];
+            foreach ($results as $result) {
+                $breakdown[StudentRegistration::getExperienceLevelLabel($result->experience_level)] = $result->count;
+            }
+
+            return $breakdown;
+        });
     }
 
-    private function getDailyRegistrations(): array
+    private function getLocationBreakdown(): array
     {
-        return collect(range(29, 0))
-            ->map(fn($daysAgo) => [
-                'date' => Carbon::now()->subDays($daysAgo)->toDateString(),
-                'count' => StudentRegistration::active()
-                    ->whereDate('created_at', Carbon::now()->subDays($daysAgo))
-                    ->count(),
-            ])
-            ->toArray();
+        return Cache::remember('location_breakdown', self::CACHE_TTL, function () {
+            $results = DB::select("
+                SELECT
+                    location,
+                    COUNT(*) as count
+                FROM student_registrations
+                WHERE is_active = 1
+                GROUP BY location
+                ORDER BY count DESC
+                LIMIT 15
+            ");
+
+            $breakdown = [];
+            foreach ($results as $result) {
+                $breakdown[$result->location] = $result->count;
+            }
+
+            return $breakdown;
+        });
+    }
+
+    private function getSchoolBreakdown(): array
+    {
+        return Cache::remember('school_breakdown', self::CACHE_TTL, function () {
+            $results = DB::select("
+                SELECT
+                    school_name,
+                    COUNT(*) as count
+                FROM student_registrations
+                WHERE is_active = 1
+                GROUP BY school_name
+                ORDER BY count DESC
+                LIMIT 15
+            ");
+
+            $breakdown = [];
+            foreach ($results as $result) {
+                $breakdown[$result->school_name] = $result->count;
+            }
+
+            return $breakdown;
+        });
+    }
+
+    private function getAgeDistribution(): array
+    {
+        return Cache::remember('age_distribution', self::CACHE_TTL, function () {
+            $results = DB::select("
+                SELECT
+                    age,
+                    COUNT(*) as count
+                FROM student_registrations
+                WHERE is_active = 1
+                GROUP BY age
+                ORDER BY age ASC
+            ");
+
+            $distribution = [];
+            foreach ($results as $result) {
+                $distribution[$result->age] = $result->count;
+            }
+
+            return $distribution;
+        });
+    }
+
+    // Efficient cache management
+    private function clearRegistrationCaches(): void
+    {
+        $cacheKeys = [
+            self::CACHE_REGISTRATION_STATS,
+            self::CACHE_REGISTRATION_ANALYTICS,
+            StudentRegistration::CACHE_STATS_KEY,
+            StudentRegistration::CACHE_ANALYTICS_KEY,
+            'experience_breakdown',
+            'location_breakdown',
+            'school_breakdown',
+            'age_distribution',
+            'daily_registrations_30',
+            'interest_breakdown',
+        ];
+
+        foreach ($cacheKeys as $key) {
+            Cache::forget($key);
+        }
+    }
+
+    // Async analytics update for non-blocking performance
+    private function updateDailyAnalyticsAsync(): void
+    {
+        // Use queue for heavy operations in production
+        if (app()->environment('production')) {
+            dispatch(function () {
+                $this->updateDailyAnalytics();
+            })->onQueue('analytics');
+        } else {
+            $this->updateDailyAnalytics();
+        }
     }
 
     private function updateDailyAnalytics(): void
     {
         $today = Carbon::today();
 
-        RegistrationAnalytics::updateOrCreate(
-            ['date' => $today],
-            [
-                'total_registrations' => StudentRegistration::whereDate('created_at', $today)->count(),
-                'verified_registrations' => StudentRegistration::whereDate('created_at', $today)->verified()->count(),
-                'contacted_registrations' => StudentRegistration::whereDate('created_at', $today)->contacted()->count(),
-            ]
-        );
+        // Use upsert for better performance than updateOrCreate
+        DB::table('registration_analytics')
+            ->updateOrInsert(
+                ['date' => $today],
+                [
+                    'total_registrations' => StudentRegistration::whereDate('created_at', $today)->count(),
+                    'verified_registrations' => StudentRegistration::whereDate('created_at', $today)->verified()->count(),
+                    'contacted_registrations' => StudentRegistration::whereDate('created_at', $today)->contacted()->count(),
+                    'updated_at' => now(),
+                ]
+            );
     }
 }
