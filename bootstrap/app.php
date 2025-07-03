@@ -12,8 +12,15 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // Use open CORS middleware for all API routes
+        $middleware->prependToGroup('api', [
+            \App\Http\Middleware\OpenCors::class,
+        ]);
 
-		 $middleware->append([\Illuminate\Http\Middleware\HandleCors::class]);
+        // Also append globally to catch all requests
+        $middleware->append([
+            \App\Http\Middleware\OpenCors::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
