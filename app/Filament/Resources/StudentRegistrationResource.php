@@ -20,7 +20,6 @@ use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\Grid;
 use Filament\Tables\Actions\BulkAction;
 use Illuminate\Database\Eloquent\Collection;
-use Filament\Tables\Enums\FiltersLayout;
 use Illuminate\Support\Facades\Cache;
 
 class StudentRegistrationResource extends Resource
@@ -32,9 +31,6 @@ class StudentRegistrationResource extends Resource
     protected static ?string $pluralModelLabel = 'Student Registrations';
     protected static ?string $navigationGroup = 'Student Management';
     protected static ?int $navigationSort = 1;
-
-    // Optimize record title for better performance
-    protected static ?string $recordTitleAttribute = 'full_name';
 
     public static function form(Form $form): Form
     {
@@ -112,17 +108,36 @@ class StudentRegistrationResource extends Resource
                     ->schema([
                         Forms\Components\Select::make('experience_level')
                             ->required()
-                            ->options(StudentRegistration::EXPERIENCE_LEVELS)
+                            ->options([
+                                'beginner' => 'Beginner - New to farming',
+                                'intermediate' => 'Intermediate - Some farming experience',
+                                'advanced' => 'Advanced - Experienced farmer',
+                                'professional' => 'Professional - Agricultural professional',
+                            ])
                             ->label('Experience Level')
-                            ->native(false),
+                            ->placeholder('Select experience level')
+                            ->native(false)
+                            ->searchable(false),
+
                         Forms\Components\CheckboxList::make('interests')
-                            ->options(array_combine(
-                                StudentRegistration::VALID_INTERESTS,
-                                StudentRegistration::VALID_INTERESTS
-                            ))
+                            ->options([
+                                'Crop Production' => 'Crop Production',
+                                'Livestock Management' => 'Livestock Management',
+                                'Sustainable Farming' => 'Sustainable Farming',
+                                'Precision Agriculture' => 'Precision Agriculture',
+                                'Hydroponics' => 'Hydroponics',
+                                'Organic Farming' => 'Organic Farming',
+                                'Agricultural Technology' => 'Agricultural Technology',
+                                'Farm Business Management' => 'Farm Business Management',
+                                'Poultry Farming' => 'Poultry Farming',
+                                'Fish Farming' => 'Fish Farming',
+                                'Beekeeping' => 'Beekeeping',
+                                'Greenhouse Management' => 'Greenhouse Management',
+                            ])
                             ->columns(2)
                             ->label('Areas of Interest')
                             ->searchable(),
+
                         Forms\Components\Textarea::make('motivation')
                             ->maxLength(2000)
                             ->rows(4)
@@ -151,16 +166,15 @@ class StudentRegistrationResource extends Resource
     {
         return $table
             ->query(
-                // Use optimized query scope for better performance
-                StudentRegistration::query()->forDashboard()
+                StudentRegistration::query()->where('is_active', true)
             )
             ->columns([
                 Tables\Columns\TextColumn::make('full_name')
                     ->label('Student Name')
+                    ->getStateUsing(fn ($record) => $record->first_name . ' ' . $record->last_name)
                     ->searchable(['first_name', 'last_name'])
                     ->sortable(['first_name', 'last_name'])
-                    ->weight(FontWeight::Bold)
-                    ->copyable(),
+                    ->weight(FontWeight::Bold),
 
                 Tables\Columns\TextColumn::make('age')
                     ->numeric()
@@ -175,7 +189,7 @@ class StudentRegistrationResource extends Resource
                     ->limit(30)
                     ->tooltip(function (Tables\Columns\TextColumn $column): ?string {
                         $state = $column->getState();
-                        return strlen($state) > 30 ? $state : null;
+                        return strlen($state ?? '') > 30 ? $state : null;
                     }),
 
                 Tables\Columns\TextColumn::make('parent_name')
@@ -192,14 +206,20 @@ class StudentRegistrationResource extends Resource
 
                 Tables\Columns\TextColumn::make('experience_level')
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn (?string $state): string => match ($state) {
                         'beginner' => 'gray',
                         'intermediate' => 'warning',
                         'advanced' => 'success',
                         'professional' => 'danger',
                         default => 'gray',
                     })
-                    ->formatStateUsing(fn ($state) => StudentRegistration::getExperienceLevelLabel($state)),
+                    ->formatStateUsing(fn (?string $state) => match($state) {
+                        'beginner' => 'Beginner',
+                        'intermediate' => 'Intermediate',
+                        'advanced' => 'Advanced',
+                        'professional' => 'Professional',
+                        default => $state ?? 'Unknown',
+                    }),
 
                 Tables\Columns\IconColumn::make('is_verified')
                     ->boolean()
@@ -222,8 +242,14 @@ class StudentRegistrationResource extends Resource
             ])
             ->filters([
                 SelectFilter::make('experience_level')
-                    ->options(StudentRegistration::EXPERIENCE_LEVELS)
+                    ->options([
+                        'beginner' => 'Beginner - New to farming',
+                        'intermediate' => 'Intermediate - Some farming experience',
+                        'advanced' => 'Advanced - Experienced farmer',
+                        'professional' => 'Professional - Agricultural professional',
+                    ])
                     ->label('Experience Level')
+                    ->placeholder('All Experience Levels')
                     ->multiple()
                     ->preload(),
 
@@ -232,14 +258,16 @@ class StudentRegistrationResource extends Resource
                         1 => 'Verified',
                         0 => 'Not Verified',
                     ])
-                    ->label('Verification Status'),
+                    ->label('Verification Status')
+                    ->placeholder('All Verification Status'),
 
                 SelectFilter::make('is_contacted')
                     ->options([
                         1 => 'Contacted',
                         0 => 'Not Contacted',
                     ])
-                    ->label('Contact Status'),
+                    ->label('Contact Status')
+                    ->placeholder('All Contact Status'),
 
                 Filter::make('age_range')
                     ->form([
@@ -291,14 +319,19 @@ class StudentRegistrationResource extends Resource
                             ->label('School')
                             ->options(function () {
                                 return Cache::remember('school_options', 3600, function () {
-                                    return StudentRegistration::active()
+                                    return StudentRegistration::query()
+                                        ->where('is_active', true)
+                                        ->whereNotNull('school_name')
+                                        ->where('school_name', '!=', '')
                                         ->distinct()
                                         ->pluck('school_name', 'school_name')
+                                        ->filter() // Remove empty values
                                         ->sort();
                                 });
                             })
                             ->searchable()
-                            ->preload(),
+                            ->preload()
+                            ->placeholder('Select a school'),
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         return $query->when(
@@ -306,8 +339,7 @@ class StudentRegistrationResource extends Resource
                             fn (Builder $query, $school): Builder => $query->where('school_name', $school),
                         );
                     }),
-            ], layout: FiltersLayout::AboveContent)
-            ->filtersFormColumns(4)
+            ])
             ->actions([
                 Tables\Actions\ViewAction::make()
                     ->slideOver(),
@@ -390,6 +422,7 @@ class StudentRegistrationResource extends Resource
                             ->schema([
                                 TextEntry::make('full_name')
                                     ->label('Full Name')
+                                    ->getStateUsing(fn ($record) => $record->first_name . ' ' . $record->last_name)
                                     ->weight(FontWeight::Bold)
                                     ->copyable(),
                                 TextEntry::make('age')
@@ -440,25 +473,41 @@ class StudentRegistrationResource extends Resource
                     ->schema([
                         TextEntry::make('experience_level')
                             ->badge()
-                            ->color(fn (string $state): string => match ($state) {
+                            ->color(fn (?string $state): string => match ($state) {
                                 'beginner' => 'gray',
                                 'intermediate' => 'warning',
                                 'advanced' => 'success',
                                 'professional' => 'danger',
                                 default => 'gray',
                             })
-                            ->formatStateUsing(fn ($state) => StudentRegistration::getExperienceLevelLabel($state)),
+                            ->formatStateUsing(fn (?string $state) => match($state) {
+                                'beginner' => 'Beginner - New to farming',
+                                'intermediate' => 'Intermediate - Some farming experience',
+                                'advanced' => 'Advanced - Experienced farmer',
+                                'professional' => 'Professional - Agricultural professional',
+                                default => $state ?? 'Unknown',
+                            }),
 
                         TextEntry::make('interests')
                             ->badge()
                             ->separator(',')
                             ->color('info')
-                            ->columnSpanFull(),
+                            ->columnSpanFull()
+                            ->formatStateUsing(function ($state) {
+                                if (is_array($state)) {
+                                    return $state;
+                                }
+                                if (is_string($state)) {
+                                    return json_decode($state, true) ?? [$state];
+                                }
+                                return [];
+                            }),
 
                         TextEntry::make('motivation')
                             ->columnSpanFull()
                             ->prose()
-                            ->markdown(),
+                            ->markdown()
+                            ->placeholder('No motivation provided'),
                     ]),
 
                 Section::make('Status & Tracking')
@@ -494,6 +543,7 @@ class StudentRegistrationResource extends Resource
 
                                 TextEntry::make('days_since_registration')
                                     ->label('Days Since Registration')
+                                    ->getStateUsing(fn ($record) => $record->created_at->diffInDays(now()))
                                     ->badge()
                                     ->color('info'),
                             ]),
@@ -520,7 +570,7 @@ class StudentRegistrationResource extends Resource
     public static function getNavigationBadge(): ?string
     {
         return Cache::remember('student_nav_badge', 300, function () {
-            return static::getModel()::active()->count();
+            return static::getModel()::where('is_active', true)->count();
         });
     }
 
@@ -529,7 +579,7 @@ class StudentRegistrationResource extends Resource
     {
         return parent::getGlobalSearchEloquentQuery()
             ->select(['id', 'first_name', 'last_name', 'email', 'school_name', 'location', 'age', 'parent_name', 'created_at'])
-            ->active();
+            ->where('is_active', true);
     }
 
     public static function getGloballySearchableAttributes(): array
@@ -540,15 +590,15 @@ class StudentRegistrationResource extends Resource
     public static function getGlobalSearchResultDetails(Model $record): array
     {
         return [
-            'School' => $record->school_name,
-            'Location' => $record->location,
-            'Age' => $record->age . ' years',
-            'Parent' => $record->parent_name,
+            'School' => $record->school_name ?? 'No school',
+            'Location' => $record->location ?? 'No location',
+            'Age' => ($record->age ?? 0) . ' years',
+            'Parent' => $record->parent_name ?? 'No parent name',
         ];
     }
 
     public static function getGlobalSearchResultTitle(Model $record): string
     {
-        return $record->full_name;
+        return ($record->first_name ?? '') . ' ' . ($record->last_name ?? '');
     }
 }
