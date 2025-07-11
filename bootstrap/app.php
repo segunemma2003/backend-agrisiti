@@ -12,14 +12,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // Use open CORS middleware for all API routes
-        $middleware->prependToGroup('api', [
-            \App\Http\Middleware\OpenCors::class,
-        ]);
-
-        // Also append globally to catch all requests
-        $middleware->append([
-            \App\Http\Middleware\OpenCors::class,
+        // Enable Laravel's built-in CORS handling
+        $middleware->api(prepend: [
+            \Illuminate\Http\Middleware\HandleCors::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

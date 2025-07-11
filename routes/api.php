@@ -4,43 +4,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\StudentRegistrationController;
 
-// Global OPTIONS handler for all routes
-Route::options('/{any}', function (Request $request) {
-    $origin = $request->header('Origin');
-
-    // List of allowed origins
-    $allowedOrigins = [
-        'http://localhost:3000',
-        'http://localhost:5173',
-        'http://localhost:8080',
-        'http://127.0.0.1:5173',
-        'https://agrisiti.com',
-        'https://www.agrisiti.com',
-        'https://e-register.agrisiti.com',
-        'https://backend.agrisiti.com',
-    ];
-
-    // Check if origin is allowed
-    $allowOrigin = '*'; // Default to allow all
-    if (in_array($origin, $allowedOrigins)) {
-        $allowOrigin = $origin;
-    }
-
-    return response()->json([], 200)
-        ->header('Access-Control-Allow-Origin', $allowOrigin)
-        ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-        ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN')
-        ->header('Access-Control-Allow-Credentials', 'true')
-        ->header('Access-Control-Max-Age', '86400');
-})->where('any', '.*');
-
-// Laravel 11 Route API group
-Route::group(['prefix' => 'v1'], function () {
-    // Specific OPTIONS handlers
-    Route::options('/register', [StudentRegistrationController::class, 'handlePreflight']);
-    Route::options('/analytics', [StudentRegistrationController::class, 'handlePreflight']);
-    Route::options('/admin/{any}', [StudentRegistrationController::class, 'handlePreflight'])->where('any', '.*');
-
+// API v1 routes
+Route::prefix('v1')->group(function () {
     // Public registration endpoint
     Route::post('/register', [StudentRegistrationController::class, 'store'])
         ->name('api.register');
@@ -50,7 +15,7 @@ Route::group(['prefix' => 'v1'], function () {
         ->name('api.analytics');
 
     // Admin endpoints
-    Route::group(['prefix' => 'admin'], function () {
+    Route::prefix('admin')->group(function () {
         Route::get('/registrations', [StudentRegistrationController::class, 'index'])
             ->name('api.admin.registrations.index');
 
@@ -71,20 +36,24 @@ Route::group(['prefix' => 'v1'], function () {
     });
 });
 
-// Health check endpoint with CORS
+// Health check endpoint
 Route::get('/health', function(Request $request) {
-    $origin = $request->header('Origin');
-
-    $response = response()->json([
+    return response()->json([
         'status' => 'ok',
         'timestamp' => now()->toISOString(),
         'laravel_version' => app()->version(),
-        'cors' => 'enabled - production ready',
-        'origin' => $origin,
+        'cors' => 'enabled - Laravel 11',
+        'origin' => $request->header('Origin'),
     ]);
-
-    return $response
-        ->header('Access-Control-Allow-Origin', '*')
-        ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-        ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-CSRF-TOKEN');
 })->name('api.health');
+
+// CORS test endpoint (for debugging)
+Route::get('/test-cors', function (Request $request) {
+    return response()->json([
+        'message' => 'CORS is working in Laravel 11!',
+        'origin' => $request->header('Origin'),
+        'method' => $request->method(),
+        'timestamp' => now(),
+        'headers' => $request->headers->all(),
+    ]);
+})->name('api.test-cors');

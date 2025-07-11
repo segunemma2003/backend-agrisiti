@@ -1,7 +1,6 @@
 <?php
 
 return [
-
     /*
     |--------------------------------------------------------------------------
     | Cross-Origin Resource Sharing (CORS) Configuration
@@ -19,16 +18,29 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    'allowed_origins' => [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:8080',
+        'http://127.0.0.1:5173',
+        'http://127.0.0.1:3000',
+        'https://agrisiti.com',
+        'https://www.agrisiti.com',
+        'https://e-register.agrisiti.com',
+        'https://backend.agrisiti.com',
+    ],
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => [
+        // Allow any localhost with port
+        '/^http:\/\/localhost(:[0-9]+)?$/',
+        '/^http:\/\/127\.0\.0\.1(:[0-9]+)?$/',
+    ],
 
     'allowed_headers' => ['*'],
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    'max_age' => 86400,
 
-    'supports_credentials' => false,
-
+    'supports_credentials' => true,
 ];
