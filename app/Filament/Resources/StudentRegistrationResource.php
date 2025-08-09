@@ -400,6 +400,84 @@ class StudentRegistrationResource extends Resource
                             }
                         })
                         ->deselectRecordsAfterCompletion(),
+                    BulkAction::make('export_excel')
+                        ->label('Export to Excel')
+                        ->icon('heroicon-o-arrow-down-tray')
+                        ->color('success')
+                        ->form([
+                            \Filament\Forms\Components\CheckboxList::make('selected_fields')
+                                ->label('Select Fields to Export')
+                                ->options([
+                                    'first_name' => 'First Name',
+                                    'last_name' => 'Last Name',
+                                    'full_name' => 'Full Name',
+                                    'email' => 'Email',
+                                    'phone' => 'Phone',
+                                    'age' => 'Age',
+                                    'date_of_birth' => 'Date of Birth',
+                                    'location' => 'Location',
+                                    'school_name' => 'School Name',
+                                    'parent_name' => 'Parent/Guardian Name',
+                                    'parent_phone' => 'Parent Phone',
+                                    'parent_email' => 'Parent Email',
+                                    'experience_level' => 'Experience Level',
+                                    'interests' => 'Areas of Interest',
+                                    'motivation' => 'Motivation',
+                                    'is_active' => 'Active Status',
+                                    'is_verified' => 'Verified Status',
+                                    'is_contacted' => 'Contacted Status',
+                                    'created_at' => 'Registration Date',
+                                ])
+                                ->default([
+                                    'first_name', 'last_name', 'email', 'phone', 'age',
+                                    'school_name', 'location', 'parent_name', 'experience_level'
+                                ])
+                                ->columns(2)
+                                ->required(),
+                        ])
+                        ->action(function (Collection $records, array $data) {
+                            return $this->exportToExcel($records, $data['selected_fields']);
+                        })
+                        ->deselectRecordsAfterCompletion(),
+                    BulkAction::make('export_pdf')
+                        ->label('Export to PDF')
+                        ->icon('heroicon-o-document-arrow-down')
+                        ->color('danger')
+                        ->form([
+                            \Filament\Forms\Components\CheckboxList::make('selected_fields')
+                                ->label('Select Fields to Export')
+                                ->options([
+                                    'first_name' => 'First Name',
+                                    'last_name' => 'Last Name',
+                                    'full_name' => 'Full Name',
+                                    'email' => 'Email',
+                                    'phone' => 'Phone',
+                                    'age' => 'Age',
+                                    'date_of_birth' => 'Date of Birth',
+                                    'location' => 'Location',
+                                    'school_name' => 'School Name',
+                                    'parent_name' => 'Parent/Guardian Name',
+                                    'parent_phone' => 'Parent Phone',
+                                    'parent_email' => 'Parent Email',
+                                    'experience_level' => 'Experience Level',
+                                    'interests' => 'Areas of Interest',
+                                    'motivation' => 'Motivation',
+                                    'is_active' => 'Active Status',
+                                    'is_verified' => 'Verified Status',
+                                    'is_contacted' => 'Contacted Status',
+                                    'created_at' => 'Registration Date',
+                                ])
+                                ->default([
+                                    'first_name', 'last_name', 'email', 'phone', 'age',
+                                    'school_name', 'location', 'parent_name', 'experience_level'
+                                ])
+                                ->columns(2)
+                                ->required(),
+                        ])
+                        ->action(function (Collection $records, array $data) {
+                            return $this->exportToPdf($records, $data['selected_fields']);
+                        })
+                        ->deselectRecordsAfterCompletion(),
                 ]),
             ])
             ->defaultSort('created_at', 'desc')
@@ -600,5 +678,177 @@ class StudentRegistrationResource extends Resource
     public static function getGlobalSearchResultTitle(Model $record): string
     {
         return ($record->first_name ?? '') . ' ' . ($record->last_name ?? '');
+    }
+
+    // Export methods
+    private function exportToExcel(Collection $records, array $selectedFields = [])
+    {
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+
+        // Define all possible fields and their headers
+        $fieldMappings = [
+            'first_name' => 'First Name',
+            'last_name' => 'Last Name',
+            'full_name' => 'Full Name',
+            'email' => 'Email',
+            'phone' => 'Phone',
+            'age' => 'Age',
+            'date_of_birth' => 'Date of Birth',
+            'location' => 'Location',
+            'school_name' => 'School Name',
+            'parent_name' => 'Parent Name',
+            'parent_phone' => 'Parent Phone',
+            'parent_email' => 'Parent Email',
+            'experience_level' => 'Experience Level',
+            'interests' => 'Interests',
+            'motivation' => 'Motivation',
+            'is_active' => 'Active',
+            'is_verified' => 'Verified',
+            'is_contacted' => 'Contacted',
+            'created_at' => 'Registration Date'
+        ];
+
+        // Use selected fields or default to all fields
+        $fieldsToExport = !empty($selectedFields) ? $selectedFields : array_keys($fieldMappings);
+        $headers = array_map(fn($field) => $fieldMappings[$field], $fieldsToExport);
+
+        $col = 'A';
+        foreach ($headers as $header) {
+            $sheet->setCellValue($col . '1', $header);
+            $col++;
+        }
+
+        // Data
+        $row = 2;
+        foreach ($records as $record) {
+            $col = 'A';
+            foreach ($fieldsToExport as $field) {
+                $value = $this->getFieldValue($record, $field);
+                $sheet->setCellValue($col . $row, $value);
+                $col++;
+            }
+            $row++;
+        }
+
+        // Auto-size columns
+        $lastCol = chr(ord('A') + count($fieldsToExport) - 1);
+        foreach (range('A', $lastCol) as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+
+        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        $filename = 'student-registrations-' . now()->format('Y-m-d-H-i-s') . '.xlsx';
+        $path = storage_path('app/public/exports/' . $filename);
+
+        // Ensure directory exists
+        if (!file_exists(dirname($path))) {
+            mkdir(dirname($path), 0755, true);
+        }
+
+        $writer->save($path);
+
+        return response()->download($path)->deleteFileAfterSend();
+    }
+
+    private function exportToPdf(Collection $records, array $selectedFields = [])
+    {
+        // Define all possible fields and their headers
+        $fieldMappings = [
+            'first_name' => 'First Name',
+            'last_name' => 'Last Name',
+            'full_name' => 'Full Name',
+            'email' => 'Email',
+            'phone' => 'Phone',
+            'age' => 'Age',
+            'date_of_birth' => 'Date of Birth',
+            'location' => 'Location',
+            'school_name' => 'School Name',
+            'parent_name' => 'Parent Name',
+            'parent_phone' => 'Parent Phone',
+            'parent_email' => 'Parent Email',
+            'experience_level' => 'Experience Level',
+            'interests' => 'Interests',
+            'motivation' => 'Motivation',
+            'is_active' => 'Active',
+            'is_verified' => 'Verified',
+            'is_contacted' => 'Contacted',
+            'created_at' => 'Registration Date'
+        ];
+
+        // Use selected fields or default to all fields
+        $fieldsToExport = !empty($selectedFields) ? $selectedFields : array_keys($fieldMappings);
+
+        $data = [];
+        foreach ($records as $record) {
+            $rowData = [];
+            foreach ($fieldsToExport as $field) {
+                $rowData[$field] = $this->getFieldValue($record, $field);
+            }
+            $data[] = $rowData;
+        }
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('exports.student-registrations', [
+            'records' => $data,
+            'fields' => $fieldsToExport,
+            'headers' => array_map(fn($field) => $fieldMappings[$field], $fieldsToExport),
+            'exportDate' => now()->format('Y-m-d H:i:s'),
+            'totalRecords' => $records->count()
+        ]);
+
+        $filename = 'student-registrations-' . now()->format('Y-m-d-H-i-s') . '.pdf';
+        return response($pdf->output(), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"'
+        ]);
+    }
+
+    private function formatExperienceLevel(?string $level): string
+    {
+        return match($level) {
+            'beginner' => 'Beginner - New to farming',
+            'intermediate' => 'Intermediate - Some farming experience',
+            'advanced' => 'Advanced - Experienced farmer',
+            'professional' => 'Professional - Agricultural professional',
+            default => $level ?? 'Unknown',
+        };
+    }
+
+    private function formatInterests($interests): string
+    {
+        if (is_array($interests)) {
+            return implode(', ', $interests);
+        }
+        if (is_string($interests)) {
+            $decoded = json_decode($interests, true);
+            return is_array($decoded) ? implode(', ', $decoded) : $interests;
+        }
+        return '';
+    }
+
+    private function getFieldValue($record, string $field): string
+    {
+        return match($field) {
+            'first_name' => $record->first_name ?? '',
+            'last_name' => $record->last_name ?? '',
+            'full_name' => ($record->first_name ?? '') . ' ' . ($record->last_name ?? ''),
+            'email' => $record->email ?? '',
+            'phone' => $record->phone ?? '',
+            'age' => (string) ($record->age ?? ''),
+            'date_of_birth' => $record->date_of_birth ? $record->date_of_birth->format('Y-m-d') : '',
+            'location' => $record->location ?? '',
+            'school_name' => $record->school_name ?? '',
+            'parent_name' => $record->parent_name ?? '',
+            'parent_phone' => $record->parent_phone ?? '',
+            'parent_email' => $record->parent_email ?? '',
+            'experience_level' => $this->formatExperienceLevel($record->experience_level),
+            'interests' => $this->formatInterests($record->interests),
+            'motivation' => strip_tags($record->motivation ?? ''),
+            'is_active' => $record->is_active ? 'Yes' : 'No',
+            'is_verified' => $record->is_verified ? 'Yes' : 'No',
+            'is_contacted' => $record->is_contacted ? 'Yes' : 'No',
+            'created_at' => $record->created_at ? $record->created_at->format('Y-m-d H:i:s') : '',
+            default => '',
+        };
     }
 }

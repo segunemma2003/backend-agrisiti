@@ -8,7 +8,6 @@ use Filament\Actions;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Pages\Concerns\ExposesTableToWidgets;
 
-
 class ListStudentRegistrations extends ListRecords
 {
     use ExposesTableToWidgets;
