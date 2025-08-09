@@ -2,10 +2,11 @@
 <html>
 <head>
     <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
     <title>Student Registrations Report</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: DejaVu Sans, Arial, sans-serif;
             font-size: 12px;
             line-height: 1.4;
             color: #333;
